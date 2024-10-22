@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Carte OpenStreetMap</title>
+    <!-- Feuille de style Leaflet -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <style>
+        #map {
+            height: 500px;
+            width: 100%;
+        }
+        #saveButton {
+            display: none;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Carte</h1>
+
+    <div id="map"></div>
+
+    <label for="mode">Sélectionner le mode de transport :</label>
+    <select id="mode">
+        <option value="driving-car">Voiture</option>
+        <option value="cycling-regular">Vélo</option>
+        <option value="foot-walking">Marche</option>
+    </select>
+
+    <button id="saveButton">Enregistrer le point</button>
+
+    <h2>Points enregistrés</h2>
+    <ul id="addressList"></ul>
+
+    {{ points|json_script:"points-data" }}
+
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+    <script>
+        let map = L.map('map').setView([44.933331 , 4.9], 13);
+        let marker;
+        let lat, lng;
+
+        let startMarker, endMarker;
+        let apiKey = '5b3ce3597851110001cf6248447810f824014dec92e502d1537fe2ee'; 
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        }).addTo(map);
+
+        let points = JSON.parse(document.getElementById('points-data').textContent);
+
+        points.forEach(function(point) {
+            let lat = point.latitude;
+            let lng = point.longitude;
+            let adresse = point.adresse;
+
+            L.marker([lat, lng]).addTo(map)
+                .bindPopup(adresse);
+
+            let li = document.createElement('li');
+            li.innerText = adresse;
+            document.getElementById('addressList').appendChild(li);
+        });
+
+        map.on('click', function(e) {
+            lat = e.latlng.lat;
+            lng = e.latlng.lng;
+
+            if (marker) {
+                map.removeLayer(marker);
+            }
+
+            marker = L.marker([lat, lng]).addTo(map)
+                .bindPopup('Lat: ' + lat + ', Lng: ' + lng)
+                .openPopup();
+
+            document.getElementById('saveButton').style.display = 'block';
+        });
+
+        map.on('contextmenu', function(e) {
+            if (!startMarker) {
+                startMarker = L.marker(e.latlng, { draggable: true }).addTo(map)
+                    .bindPopup("Point de départ").openPopup();
+            } else if (!endMarker) {
+                endMarker = L.marker(e.latlng, { draggable: true }).addTo(map)
+                    .bindPopup("Point d'arrivée").openPopup();
+
+                getRoute(startMarker.getLatLng(), endMarker.getLatLng());  
+            }
+        });
+
+        function getRoute(start, end) {
+            let mode = document.getElementById('mode').value;
+            let url = `https://api.openrouteservice.org/v2/directions/${mode}?api_key=${apiKey}&start=${start.lng},${start.lat}&end=${end.lng},${end.lat}`;
+
+            fetch(url)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Erreur lors de la requête à OpenRouteService');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    console.log('Réponse complète de l\'API OpenRouteService :', data);
+
+                    if (data.features && data.features.length > 0) {
+                        let coords = data.features[0].geometry.coordinates;
+                        let latlngs = coords.map(function(coord) {
+                            return [coord[1], coord[0]]; 
+                        });
+
+                        let polyline = L.polyline(latlngs, { color: 'blue' }).addTo(map);
+                        map.fitBounds(polyline.getBounds());
+
+                        let steps = data.features[0].properties.segments[0].steps;
+                        let instructions = steps.map(step => `<li>${step.instruction} (${step.distance.toFixed(1)} m)</li>`).join('');
+                        document.getElementById('addressList').innerHTML = `<h3>Instructions de l'itinéraire :</h3><ul>${instructions}</ul>`;
+                    } else {
+                        alert("Aucun itinéraire trouvé entre ces deux points.");
+                    }
+                })
+                .catch(error => {
+                    console.error('Erreur:', error);
+                    alert("Une erreur est survenue lors de la récupération de l'itinéraire.");
+                });
+        }
+
+        document.getElementById('saveButton').addEventListener('click', function() {
+            fetch('/save_point/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': '{{ csrf_token }}'
+                },
+                body: JSON.stringify({ 'lat': lat, 'lng': lng })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    alert('Point sauvegardé avec succès ! Adresse : ' + data.adresse);
+
+                    let li = document.createElement('li');
+                    li.innerText = data.adresse;
+                    document.getElementById('addressList').appendChild(li);
+                } else {
+                    alert('Erreur lors de la sauvegarde du point.');
+                }
+            })
+            .catch(error => console.error('Erreur:', error));
+        });
+
+    </script>
+
+</body>
+</html>
